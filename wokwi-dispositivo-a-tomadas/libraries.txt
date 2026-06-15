@@ -1,0 +1,2 @@
+# Bibliotecas Arduino usadas no firmware
+PubSubClient

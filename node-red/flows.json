@@ -1,0 +1,176 @@
+[
+  {
+    "id": "tab-debora",
+    "type": "tab",
+    "label": "Gestao Energetica Residencial",
+    "disabled": false,
+    "info": "Fluxo do projeto IoT de gestao energetica residencial.\nGrupo: Jean Alex da Silva, Deborah Jamilly de Abreu Souza, Gabriela Nellessen de Sousa.\n\nArquitetura:\n- Dois dispositivos identicos (A=tomadas, B=lampadas) publicam consumo via MQTT\n- Node-RED grava em InfluxDB com tag circuito\n- Regras de negocio: pico, stand-by, horario programado\n- Comandos para acionar os reles via MQTT\n- Alertas ao usuario via Telegram"
+  },
+
+  { "id": "mqtt-broker", "type": "mqtt-broker", "name": "HiveMQ publico",
+    "broker": "broker.hivemq.com", "port": "1883", "clientid": "node-red-iot-residencial",
+    "autoConnect": true, "usetls": false, "protocolVersion": "4",
+    "keepalive": "60", "cleansession": true,
+    "birthTopic": "", "birthQos": "0", "birthPayload": "",
+    "closeTopic": "", "closeQos": "0", "closePayload": "",
+    "willTopic": "", "willQos": "0", "willPayload": "" },
+
+  { "id": "influxdb-config", "type": "influxdb", "hostname": "us-east-1-1.aws.cloud2.influxdata.com",
+    "port": "443", "protocol": "https", "database": "", "name": "InfluxDB Cloud",
+    "usetls": true, "tls": "", "influxdbVersion": "2.0",
+    "url": "https://us-east-1-1.aws.cloud2.influxdata.com/",
+    "timeout": "",
+    "rejectUnauthorized": true },
+
+  {
+    "id": "mqtt-in-consumo-tomadas", "type": "mqtt in", "z": "tab-debora",
+    "name": "MQTT consumo tomadas", "topic": "iot/residencial/tomadas/consumo",
+    "qos": "0", "datatype": "auto", "broker": "mqtt-broker",
+    "nl": false, "rap": true, "rh": 0,
+    "x": 150, "y": 100,
+    "wires": [["fn-parse-consumo"]]
+  },
+  {
+    "id": "mqtt-in-consumo-lampadas", "type": "mqtt in", "z": "tab-debora",
+    "name": "MQTT consumo lampadas", "topic": "iot/residencial/lampadas/consumo",
+    "qos": "0", "datatype": "auto", "broker": "mqtt-broker",
+    "nl": false, "rap": true, "rh": 0,
+    "x": 150, "y": 160,
+    "wires": [["fn-parse-consumo"]]
+  },
+
+  {
+    "id": "fn-parse-consumo", "type": "function", "z": "tab-debora",
+    "name": "Parse consumo + kWh acumulado (por circuito)",
+    "func": "// Identifica o circuito pelo proprio topico MQTT: iot/residencial/<circuito>/consumo\nconst parts = (msg.topic || '').split('/');\nconst circuito = parts[2]; // 'tomadas' ou 'lampadas'\nif (circuito !== 'tomadas' && circuito !== 'lampadas') {\n  node.warn('topico inesperado: ' + msg.topic);\n  return null;\n}\n\nconst watts = parseFloat(msg.payload);\nif (isNaN(watts)) { node.warn('payload invalido em ' + circuito); return null; }\n\n// Estado por circuito (variaveis sufixadas)\nconst agora = Date.now();\nconst ultimo  = flow.get('ultimoTs_' + circuito) || agora;\nconst kwhAcum = flow.get('kwhAcum_' + circuito) || 0;\nconst deltaH  = (agora - ultimo) / 3600000;\nconst novoKwh = kwhAcum + (watts * deltaH) / 1000;\nflow.set('ultimoTs_' + circuito, agora);\nflow.set('kwhAcum_' + circuito, novoKwh);\nflow.set('ultimoWatts_' + circuito, watts);\n\nconst TARIFA = 0.95;        // R$/kWh - ajustar conforme a concessionaria\nconst TENSAO_V = 127;        // V (tensao nominal residencial - Sao Paulo)\nconst corrente = watts / TENSAO_V;\nlet status = 'normal';\nif (watts > 2000) status = 'critico';\nelse if (watts > 1200) status = 'alto';\nflow.set('status_' + circuito, status);\n\n// formato InfluxDB v2: [fields, tags]\nmsg.payload = [\n  { watts: watts, corrente_a: corrente, tensao_v: TENSAO_V, kwh: novoKwh, custo_brl: novoKwh * TARIFA, status: status },\n  { circuito: circuito }\n];\nmsg.circuito = circuito; // propaga para os proximos nos (regra pico)\nreturn msg;\n",
+    "outputs": 1, "noerr": 0,
+    "x": 480, "y": 130,
+    "wires": [["influx-out-energia", "fn-regra-pico"]]
+  },
+
+  {
+    "id": "influx-out-energia", "type": "influxdb out", "z": "tab-debora",
+    "name": "InfluxDB energia",
+    "influxdb": "influxdb-config",
+    "measurement": "energia",
+    "precision": "ms",
+    "retentionPolicy": "",
+    "database": "iot",
+    "precisionV18FluxV20": "ms",
+    "retentionPolicyV18Flux": "",
+    "org": "6e78b237b4efa21b",
+    "bucket": "energia-residencial",
+    "x": 880, "y": 100,
+    "wires": []
+  },
+
+  {
+    "id": "fn-regra-pico", "type": "function", "z": "tab-debora",
+    "name": "Regra: pico > 2000 W por 5 min (por circuito)",
+    "func": "const circuito = msg.circuito;\nif (!circuito) return null;\nconst w = flow.get('ultimoWatts_' + circuito);\nif (typeof w !== 'number') return null;\n\nconst LIMITE_W  = 2000;\nconst JANELA_MS = 5 * 60 * 1000;\nconst agora = Date.now();\nconst K_INI = 'inicioPico_' + circuito;\nconst K_ALR = 'alertaPicoEnviado_' + circuito;\n\nlet inicioPico = flow.get(K_INI) || 0;\n\nif (w > LIMITE_W) {\n  if (inicioPico === 0) {\n    flow.set(K_INI, agora);\n  } else if (agora - inicioPico > JANELA_MS && !flow.get(K_ALR)) {\n    flow.set(K_ALR, true);\n    const CHAT_ID = parseInt(env.get('TELEGRAM_CHAT_ID') || '675744903');\n    const topicoCmd = 'iot/residencial/' + circuito + '/comando';\n    return [\n      { payload: 'OFF', topic: topicoCmd, circuito: circuito, motivo: 'pico' },\n      { payload: { chatId: CHAT_ID, type: 'message', content: 'Pico de ' + w.toFixed(0) + ' W sustentado por mais de 5 min no circuito ' + circuito + ' - desligando o disjuntor.' } }\n    ];\n  }\n} else {\n  flow.set(K_INI, 0);\n  flow.set(K_ALR, false);\n}\nreturn null;",
+    "outputs": 2, "noerr": 0,
+    "x": 500, "y": 200,
+    "wires": [["mqtt-out-cmd", "fn-log-acionamento"], ["telegram-sender"]]
+  },
+
+  {
+    "id": "mqtt-out-cmd", "type": "mqtt out", "z": "tab-debora",
+    "name": "MQTT -> comando circuito", "topic": "",
+    "qos": "0", "retain": "false", "broker": "mqtt-broker",
+    "x": 880, "y": 200,
+    "wires": []
+  },
+
+  {
+    "id": "telegram-sender", "type": "telegram sender", "z": "tab-debora",
+    "name": "Telegram alerta",
+    "bot": "telegram-bot",
+    "haserroroutput": false,
+    "outputs": 1,
+    "x": 880, "y": 280,
+    "wires": [[]]
+  },
+  {
+    "id": "telegram-bot", "type": "telegram bot",
+    "botname": "iot_residencial_bot",
+    "usernames": "",
+    "chatids": "",
+    "baseapiurl": "",
+    "updatemode": "polling",
+    "pollinterval": "300",
+    "usesocks": false,
+    "sockshost": "", "socksport": "",
+    "socksusername": "", "sockspassword": "",
+    "bothost": "", "botpath": "",
+    "localbotport": "",
+    "publicbotport": "",
+    "publicbothost": "",
+    "privatekey": "", "certificate": "", "useselfsignedcertificate": false,
+    "sslterminated": false, "verboselogging": false
+  },
+
+  {
+    "id": "inject-standby-check", "type": "inject", "z": "tab-debora",
+    "name": "Checa stand-by a cada 1 min",
+    "props": [{ "p": "payload" }],
+    "repeat": "60", "crontab": "", "once": false, "onceDelay": 0.1,
+    "topic": "", "payload": "", "payloadType": "date",
+    "x": 160, "y": 380,
+    "wires": [["fn-regra-standby"]]
+  },
+  {
+    "id": "fn-regra-standby", "type": "function", "z": "tab-debora",
+    "name": "Regra: stand-by 5-15 W por 30 min (por circuito)",
+    "func": "const JANELA_MS = 30 * 60 * 1000;\nconst agora = Date.now();\nconst circuitos = ['tomadas', 'lampadas'];\nconst out = [];\n\nfor (const c of circuitos) {\n  const w = flow.get('ultimoWatts_' + c) || 0;\n  const K_INI = 'inicioStb_' + c;\n  const K_ALR = 'stbAlerta_' + c;\n  let inicioStb = flow.get(K_INI) || 0;\n\n  if (w >= 5 && w <= 15) {\n    if (inicioStb === 0) flow.set(K_INI, agora);\n    else if (agora - inicioStb > JANELA_MS && !flow.get(K_ALR)) {\n      flow.set(K_ALR, true);\n      const CHAT_ID = parseInt(env.get('TELEGRAM_CHAT_ID') || '675744903');\n      out.push({ payload: { chatId: CHAT_ID, type: 'message', content: 'Consumo de ' + w.toFixed(1) + ' W ha mais de 30 min no circuito ' + c + ' - possivel stand-by. Sugiro desligar.' } });\n    }\n  } else {\n    flow.set(K_INI, 0);\n    flow.set(K_ALR, false);\n  }\n}\nreturn [out];",
+    "outputs": 1, "noerr": 0,
+    "x": 500, "y": 380,
+    "wires": [["telegram-sender"]]
+  },
+
+  {
+    "id": "inject-horario-noite", "type": "inject", "z": "tab-debora",
+    "name": "Horario programado: 01:00 desliga lampadas",
+    "props": [{ "p": "payload" }],
+    "repeat": "", "crontab": "00 01 * * *", "once": false,
+    "topic": "", "payload": "OFF", "payloadType": "str",
+    "x": 230, "y": 480,
+    "wires": [["fn-horario-prog"]]
+  },
+  {
+    "id": "inject-horario-manha", "type": "inject", "z": "tab-debora",
+    "name": "Horario programado: 06:00 liga lampadas",
+    "props": [{ "p": "payload" }],
+    "repeat": "", "crontab": "00 06 * * *", "once": false,
+    "topic": "", "payload": "ON", "payloadType": "str",
+    "x": 230, "y": 540,
+    "wires": [["fn-horario-prog"]]
+  },
+  {
+    "id": "fn-horario-prog", "type": "function", "z": "tab-debora",
+    "name": "Monta comando por horario",
+    "func": "const circuito = 'lampadas';\nconst acao = msg.payload;\nmsg.topic = 'iot/residencial/' + circuito + '/comando';\nmsg.payload = acao;\nmsg.circuito = circuito;\nmsg.motivo = 'horario programado';\nreturn msg;",
+    "outputs": 1, "noerr": 0,
+    "x": 620, "y": 510,
+    "wires": [["mqtt-out-cmd", "fn-log-acionamento"]]
+  },
+
+  {
+    "id": "fn-log-acionamento", "type": "function", "z": "tab-debora",
+    "name": "Log de acionamento (auditoria)",
+    "func": "// circuito vem de msg.circuito (passado pelas funcoes upstream)\nconst circuito = msg.circuito || 'desconhecido';\nconst acao = msg.payload;\n// formato InfluxDB v2: [fields, tags]\nmsg.payload = [\n  { acao: acao, motivo: msg.motivo || 'automatico' },\n  { circuito: circuito }\n];\nreturn msg;",
+    "outputs": 1, "noerr": 0,
+    "x": 920, "y": 510,
+    "wires": [["influx-out-acionamentos"]]
+  },
+  {
+    "id": "influx-out-acionamentos", "type": "influxdb out", "z": "tab-debora",
+    "name": "InfluxDB acionamentos",
+    "influxdb": "influxdb-config",
+    "measurement": "acionamentos",
+    "precision": "ms",
+    "org": "6e78b237b4efa21b",
+    "bucket": "energia-residencial",
+    "x": 1210, "y": 510,
+    "wires": []
+  }
+]

@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "author": "Jean Alex, Deborah Jamilly, Gabriela Nellessen - Mackenzie OIC 2026.02",
+  "editor": "wokwi",
+  "serialMonitor": { "display": "always", "newline": "lf" },
+  "parts": [
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot1",
+      "top": -100,
+      "left": -240,
+      "attrs": { "value": "512" }
+    },
+    {
+      "type": "wokwi-relay-module",
+      "id": "rele1",
+      "top": -100,
+      "left": 220,
+      "attrs": { "type": "SPDT" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "lbl_pot",
+      "top": -160,
+      "left": -250,
+      "attrs": {
+        "text": "POT 10K — simula SCT-013 60A (sensor de corrente)",
+        "fontSize": "12"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "lbl_rele",
+      "top": -160,
+      "left": 220,
+      "attrs": {
+        "text": "Modulo rele — controla o circuito TOMADAS",
+        "fontSize": "12"
+      }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+
+    [ "pot1:VCC", "esp:3V3",   "red",    [ "v0" ] ],
+    [ "pot1:GND", "esp:GND.1", "black",  [ "v0" ] ],
+    [ "pot1:SIG", "esp:34",    "orange", [ "v0" ] ],
+
+    [ "rele1:VCC", "esp:5V",    "red",    [ "v0" ] ],
+    [ "rele1:GND", "esp:GND.2", "black",  [ "v0" ] ],
+    [ "rele1:IN",  "esp:16",    "green",  [ "v0" ] ]
+  ],
+  "dependencies": {}
+}
