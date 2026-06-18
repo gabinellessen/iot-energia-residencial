@@ -110,6 +110,10 @@ A energia em kWh é integrada no Node-RED em janelas de uma hora, e o custo (R$)
 - `energia` — tag `circuito ∈ {tomadas, lampadas}` — fields: `watts`, `corrente_a`, `tensao_v`, `kwh`, `custo_brl`, `status`
 - `acionamentos` — tag `circuito` — fields: `acao`, `motivo`
 
+## Dashboard
+<img width="975" height="1229" alt="WhatsApp Image 2026-06-17 at 23 17 54" src="https://github.com/user-attachments/assets/7a7878e8-cb98-4aa5-b43a-68e739034b75" />
+
+
 ## Atenção — anonimização
 Antes de tornar o repositório público, garanta que:
 - O **token do bot Telegram** está apenas configurado na UI do Node-RED, não hardcoded em arquivo
