@@ -78,7 +78,7 @@ Os **dois dispositivos são idênticos em hardware e firmware**, diferenciados a
    - **Seção 4 — Automação e Alertas**: log de acionamentos, motivos, picos e stand-by do dia
 
 ## Vídeo de demonstração
-INSERIR LINK DO YOUTUBE AQUI
+https://youtu.be/yww3u4SdNF8
 
 ## Tópicos MQTT
 
